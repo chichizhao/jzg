@@ -1,1 +1,4 @@
+#!/env/bin
+# this script is aim to check the clone from the NGS DATA and NGS assembly drift
 
+# index the ref
