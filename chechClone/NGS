@@ -64,5 +64,4 @@ vcftools --vcf jzgk_vcffilter.recode.vcf --min-alleles 2 --max-alleles 2 --maf 0
 
 # after selection, we got the SNPs have the biological meaning ones
 # use the python script to claculate the SNPs sites 
-python 
-
+python checkClone.py
