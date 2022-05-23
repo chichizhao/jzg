@@ -1,0 +1,94 @@
+#!/bin/bash
+site=jzgk
+refe=typha
+source /home/chichi/anaconda3/etc/profile.d/conda.sh
+species=T_lat
+## step 1 trim
+# for file in $(ls *_1.fq.gz | awk -F '[_]'  '{print $1}');do
+# trimmomatic PE -threads 10 ${file}_1.fq.gz ${file}_2.fq.gz -baseout ${file}.fq.gz LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+# done
+conda activate bio
+#build the index 
+bwa index -p ${species} ${refe}.fasta
+samtools faidx ${refe}.fasta
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar CreateSequenceDictionary -R ${refe}.fasta -O ${refe}.dict
+# mapping 
+for file in $(ls *_1P.fq.gz | awk -F '[_]'  '{print $1}');do
+echo "bwa mem -R "@RG\tID:LOO1\tSM:${file}\tPL:illumina\tLB:GCTTAGACTC+CAGAGGTTGA\tPU:unit" \" >> bash${file}
+echo "-M ${species} -t 20 \" >> bash${file}
+echo "${file}_1P.fq.gz \" >> bash${file}
+echo "${file}_2P.fq.gz > ${file}.sam" >> bash${file}
+echo "samtools view -@ 20 -Sb ${file}.sam > ${file}.bam" >> bash${file}
+echo "samtools sort -@ 30 ${file}.bam -o ${file}_sort.bam" >> bash${file}
+echo "java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \" >>bash${file}
+echo "MarkDuplicates -I ${file}_sort.bam -O ${file}_markdup.bam -M ${file}_metrics.txt -MAX_FILE_HANDLES 1000" >>bash${file}
+echo "samtools index -@ 10 ${file}_markdup.bam" >>bash${file}
+echo "java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \" >>bash${file}
+echo "HaplotypeCaller --native-pair-hmm-threads 64 \" >>bash${file}
+echo "-R ${refe}.fasta \" >>bash${file}
+echo "-I ${file}_markdup.bam \" >>bash${file}
+echo "-ERC GVCF -O ${file}.g.vcf" >>bash${file}
+done
+for file in $(ls *_1P.fq.gz | awk -F '[_]'  '{print $1}');do
+nohup bash bash${file} &
+done
+for file in $(ls *_1P.fq.gz | awk -F '[_]'  '{print $1}');do echo -en --variant ${file}.g.vcf' '; done > mergevcf
+echo  >> mergevcf
+cat mergevcf | while read line;do
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+CombineGVCFs -R ${refe}.fasta ${line} -O ${site}_merge.g.vcf;
+done
+
+
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+GenotypeGVCFs  -R ${refe}.fasta \
+-V ${site}_merge.g.vcf -O ${site}_raw.vcf
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+SelectVariants  -R ${refe}.fasta \
+-V ${site}_raw.vcf --select-type-to-include SNP -O ${site}_snp.vcf
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+VariantsToTable  -R ${refe}.fasta \
+-V ${site}_snp.vcf -O Rtable_XAFH_snp.txt -F CHROM -F POS -F FILTER -F QD -F MQ -F FS -F SOR -F MQRankSum -F ReadPosRankSum -F DP 
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+VariantFiltration \
+   -R ${refe}.fasta \
+   -V ${site}_snp.vcf \
+   -O ${site}_filter_snp.vcf \
+   --filter-expression "MQ < 40.0" \
+   --filter-name "MQ_filter" \
+   --filter-expression "MQRankSum < -2.0" \
+   --filter-name "MQRankSum_filter" \
+   --filter-expression "FS > 300.0" \
+   --filter-name "FS_filter" \
+   --filter-expression "QD < 0.0" \
+   -filter-name "QD_filter" \
+   --filter-expression "DP > 8000.0" \
+   --filter-name "DP_large"
+
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.3.0-0/gatk-package-4.2.3.0-local.jar \
+SelectVariants \
+     -R ${refe}.fasta \
+     -V ${site}_filter_snp.vcf \
+     -O ${site}_clean_snp.vcf \
+     --exclude-filtered true
+
+vcftools --vcf ${site}_clean_snp.vcf \
+    --minGQ 30 \
+    --minDP 20 \
+    --recode \
+    --recode-INFO-all \
+    --out ${site}_vcffilter
+
+vcftools --vcf ${site}_vcffilter.recode.vcf \
+    --max-missing-count 4 \
+    --min-alleles 2 \
+    --max-alleles 2 \
+    --maf 0.01 \
+    --recode-INFO-all \
+    --recode \
+    --out ${site}_good
+    
+ # the script is similar to the NGS workflow.
+ # change the beginning header of the line 
+ python checkClone
+ 
