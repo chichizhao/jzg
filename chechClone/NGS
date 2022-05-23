@@ -2,3 +2,67 @@
 # this script is aim to check the clone from the NGS DATA and NGS assembly drift
 
 # index the ref
+
+bwa index -p T_ang scaffolds.gapcloser.fasta
+samtools faidx scaffolds.gapcloser.fasta
+gatk --java-options "-Xmx200G" CreateSequenceDictionary -R final.genome.scf.fasta -O final.genome.scf.fasta.dict
+
+#mapping with bwa
+bwa mem -R "@RG\tID:LOO1\tSM:jzg2013\tPL:illumina\tLB:GCTTAGACTC+CAGAGGTTGA\tPU:unit" -M T_lat -t 32 /home/chichi/data/Typha_latifolia/jzg2013/trim/jzg2013_1P.fq.gz /home/chichi/data/Typha_latifolia/jzg2013/trim/jzg2013_2P.fq.gz > jzg2013.sam 
+samtools flagstat jzg2013.sam > jzg2013.bam.stat
+
+# mark & remove the duplication with samtools and GATK4
+samtools view -@ 20 -Sb jzg2013.sam > jzg2013.bam
+samtools sort -@ 20 jzg2013.bam -o jzg2013_sort.bam 
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+MarkDuplicates -I jzg2013_sort.bam -O jzg2013_markdup.bam -M jzg2013_metrics.txt -MAX_FILE_HANDLES 1000
+
+# calling the SNV & select SNPs
+samtools index -@ 20 jzg2013_markdup.bam
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+HaplotypeCaller --native-pair-hmm-threads 64 \
+-R final.genome.scf.fasta \
+-I jzg2013_markdup.bam \
+-ERC GVCF -O jzg2013.g.vcf
+
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+CombineGVCFs  -R final.genome.scf.fasta \
+--variant jzg2013.g.vcf \
+--variant jzg_merge.g.vcf \
+-O jzgk_merge.g.vcf
+
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+GenotypeGVCFs \
+-R final.genome.scf.fasta \
+-V jzgk_merge.g.vcf \
+-O jzgk_raw.vcf
+
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+SelectVariants  -R final.genome.scf.fasta \
+-V jzgk_raw.vcf --select-type-to-include SNP -O jzgk_snp.vcf
+
+# vis the SNP condition and give the select condition
+java -Djava.io.tmpdir=/home/chichi/tmp -Xmx200G  -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+VariantsToTable  -R final.genome.scf.fasta  \
+-V jzgk_snp.vcf -O Rtable_jzk2013_snp.txt -F CHROM -F POS -F FILTER -F QD -F MQ -F FS -F SOR -F MQRankSum -F ReadPosRankSum -F DP 
+
+# after plot with the R and you can set the parameters in the following filter
+java -Djava.io.tmpdir=/home/chichi/tem -Xmx96G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar VariantFiltration \
+-R final.genome.scf.fasta -V jzgk_snp.vcf -O jzgk_filter_snp.vcf \
+--filter-expression "MQ < 40.0" --filter-name "MQ_filter" \
+--filter-expression "MQRankSum < -5.0" --filter-name "MQRankSum_filter" \
+--filter-expression "FS > 200.0" --filter-name "FS_filter" \
+--filter-expression "QD < 0.0" --filter-name "QD_filter" \
+--filter-expression "DP > 8000.0" --filter-name "DP_large" 
+java -Djava.io.tmpdir=/home/chichi/tem -Xmx96G -jar /home/chichi/anaconda3/envs/bio/share/gatk4-4.2.4.1-0/gatk-package-4.2.4.1-local.jar \
+SelectVariants \
+-R final.genome.scf.fasta \
+-V jzgk_filter_snp.vcf \
+-O jzgk_clean_snp.vcf --exclude-filtered true
+vcftools --vcf jzgk_clean_snp.vcf --minGQ 30 --minDP 20 --recode --recode-INFO-all --out jzgk_vcffilter
+vcftools --vcf jzgk_vcffilter.recode.vcf --min-alleles 2 --max-alleles 2 --maf 0.01 --recode-INFO-all --recode --out jzgk_good
+
+# after selection, we got the SNPs have the biological meaning ones
+# use the python script to claculate the SNPs sites 
+python 
+
